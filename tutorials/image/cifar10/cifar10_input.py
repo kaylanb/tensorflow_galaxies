@@ -83,18 +83,18 @@ def read_cifar10(filename_queue):
   record_bytes = tf.decode_raw(value, tf.uint8)
 
   # The first bytes represent the label, which we convert from uint8->int32.
+  strides=[1]
   result.label = tf.cast(
-      tf.strided_slice(record_bytes, [0], [label_bytes]), tf.int32)
+      tf.strided_slice(record_bytes, [0], [label_bytes], strides), tf.int32)
 
   # The remaining bytes after the label represent the image, which we reshape
   # from [depth * height * width] to [depth, height, width].
   depth_major = tf.reshape(
       tf.strided_slice(record_bytes, [label_bytes],
-                       [label_bytes + image_bytes]),
+                       [label_bytes + image_bytes],strides),
       [result.depth, result.height, result.width])
   # Convert from [depth, height, width] to [height, width, depth].
   result.uint8image = tf.transpose(depth_major, [1, 2, 0])
-
   return result
 
 
@@ -132,7 +132,8 @@ def _generate_image_and_label_batch(image, label, min_queue_examples,
         capacity=min_queue_examples + 3 * batch_size)
 
   # Display the training images in the visualizer.
-  tf.contrib.deprecated.image_summary('images', images)
+  #tf.contrib.deprecated.image_summary('images', images)
+  tf.summary.image('images', images)
 
   return images, tf.reshape(label_batch, [batch_size])
 
@@ -172,6 +173,8 @@ def distorted_inputs(data_dir, batch_size):
 
   # Randomly flip the image horizontally.
   distorted_image = tf.image.random_flip_left_right(distorted_image)
+
+  raise ValueError
 
   # Because these operations are not commutative, consider randomizing
   # the order their operation.
