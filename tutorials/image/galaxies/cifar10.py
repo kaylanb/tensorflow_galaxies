@@ -47,33 +47,6 @@ import cifar10_input
 
 FLAGS = tf.app.flags.FLAGS
 
-# Basic model parameters.
-tf.app.flags.DEFINE_integer('batch_size', 128,
-                            """Number of images to process in a batch.""")
-tf.app.flags.DEFINE_string('data_dir', '/Users/kaylan1/tensorflow/galaxies/data_dir',
-                           """Path to the CIFAR-10 data directory.""")
-tf.app.flags.DEFINE_boolean('use_fp16', False,
-                            """Train the model using fp16.""")
-
-# Global constants describing the CIFAR-10 data set.
-IMAGE_SIZE = cifar10_input.IMAGE_SIZE
-NUM_CLASSES = cifar10_input.NUM_CLASSES
-NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = cifar10_input.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN
-NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = cifar10_input.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL
-
-
-# Constants describing the training process.
-MOVING_AVERAGE_DECAY = 0.9999     # The decay to use for the moving average.
-NUM_EPOCHS_PER_DECAY = 350.0      # Epochs after which learning rate decays.
-LEARNING_RATE_DECAY_FACTOR = 0.1  # Learning rate decay factor.
-INITIAL_LEARNING_RATE = 0.1       # Initial learning rate.
-
-# If a model is trained with multiple GPUs, prefix all Op names with tower_name
-# to differentiate the operations. Note that this prefix is removed from the
-# names of the summaries when visualizing a model.
-TOWER_NAME = 'tower'
-
-
 def _activation_summary(x):
   """Helper to create summaries for activations.
 
@@ -87,7 +60,7 @@ def _activation_summary(x):
   """
   # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
   # session. This helps the clarity of presentation on tensorboard.
-  tensor_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', x.op.name)
+  tensor_name = re.sub('%s_[0-9]*/' % FLAGS.TOWER_NAME, '', x.op.name)
   #tf.contrib.deprecated.histogram_summary(tensor_name + '/activations', x)
   #tf.contrib.deprecated.scalar_summary(tensor_name + '/sparsity',
   #                                     tf.nn.zero_fraction(x))
@@ -108,7 +81,7 @@ def _variable_on_cpu(name, shape, initializer):
     Variable Tensor
   """
   with tf.device('/cpu:0'):
-    dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+    dtype = tf.float32
     var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
   return var
 
@@ -129,7 +102,7 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
   Returns:
     Variable Tensor
   """
-  dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+  dtype = tf.float32
   var = _variable_on_cpu(
       name,
       shape,
@@ -161,7 +134,8 @@ def distorted_inputs():
   return images, labels
 
 
-def inputs(eval_data):
+def inputs(train=None, batch_size=None, num_epochs=None,\
+		   use_train=True,use_ivar=False):
   """Construct input for CIFAR evaluation using the Reader ops.
 
   Args:
@@ -174,16 +148,8 @@ def inputs(eval_data):
   Raises:
     ValueError: If no data_dir
   """
-  if not FLAGS.data_dir:
-    raise ValueError('Please supply a data_dir')
-  data_dir = os.path.join(FLAGS.data_dir, 'cifar-10-batches-bin')
-  images, labels = cifar10_input.inputs(eval_data=eval_data,
-                                        data_dir=data_dir,
-                                        batch_size=FLAGS.batch_size)
-  if FLAGS.use_fp16:
-    images = tf.cast(images, tf.float16)
-    labels = tf.cast(labels, tf.float16)
-  return images, labels
+  return cifar10_input.inputs(train=train, batch_size=batch_size,num_epochs=num_epochs,\
+							  use_train=use_train,use_ivar=use_ivar)
 
 
 def inference(images):
@@ -262,9 +228,9 @@ def inference(images):
   # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
   # and performs the softmax internally for efficiency.
   with tf.variable_scope('softmax_linear') as scope:
-    weights = _variable_with_weight_decay('weights', [192, NUM_CLASSES],
+    weights = _variable_with_weight_decay('weights', [192, FLAGS.NUM_CLASSES],
                                           stddev=1/192.0, wd=0.0)
-    biases = _variable_on_cpu('biases', [NUM_CLASSES],
+    biases = _variable_on_cpu('biases', [FLAGS.NUM_CLASSES],
                               tf.constant_initializer(0.0))
     softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
     _activation_summary(softmax_linear)
@@ -337,14 +303,14 @@ def train(total_loss, global_step):
     train_op: op for training.
   """
   # Variables that affect learning rate.
-  num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
-  decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
+  num_batches_per_epoch = FLAGS.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
+  decay_steps = int(num_batches_per_epoch * FLAGS.NUM_EPOCHS_PER_DECAY)
 
   # Decay the learning rate exponentially based on the number of steps.
-  lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+  lr = tf.train.exponential_decay(FLAGS.INITIAL_LEARNING_RATE,
                                   global_step,
                                   decay_steps,
-                                  LEARNING_RATE_DECAY_FACTOR,
+                                  FLAGS.LEARNING_RATE_DECAY_FACTOR,
                                   staircase=True)
   tf.summary.scalar('learning_rate', lr)
 
@@ -370,7 +336,7 @@ def train(total_loss, global_step):
 
   # Track the moving averages of all trainable variables.
   variable_averages = tf.train.ExponentialMovingAverage(
-      MOVING_AVERAGE_DECAY, global_step)
+      FLAGS.MOVING_AVERAGE_DECAY, global_step)
   variables_averages_op = variable_averages.apply(tf.trainable_variables())
 
   with tf.control_dependencies([apply_gradient_op, variables_averages_op]):

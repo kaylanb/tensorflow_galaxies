@@ -45,25 +45,19 @@ import cifar10
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('train_dir', '/Users/kaylan1/tensorflow/galaxies/train_dir',
-                           """Directory where to write event logs """
-                           """and checkpoint.""")
-tf.app.flags.DEFINE_integer('max_steps', 1000000,
-                            """Number of batches to run.""")
-tf.app.flags.DEFINE_boolean('log_device_placement', False,
-                            """Whether to log device placement.""")
-
-
 def train():
   """Train CIFAR-10 for a number of steps."""
   with tf.Graph().as_default():
     global_step = tf.contrib.framework.get_or_create_global_step()
 
     # Get images and labels for CIFAR-10.
-    images, labels = cifar10.galaxy_inputs() #distorted_inputs()
+    images, labels = cifar10.inputs(train=True,batch_size=FLAGS.batch_size,\
+									num_epochs=FLAGS.num_epochs,\
+									use_train=True,use_ivar=False)
 
     # Build a Graph that computes the logits predictions from the
     # inference model.
+    raise ValueError
     logits = cifar10.inference(images)
 
     # Calculate loss.
@@ -109,9 +103,8 @@ def train():
 
 
 def main(argv=None):  # pylint: disable=unused-argument
-  cifar10.maybe_download_and_extract()
-  if tf.gfile.Exists(FLAGS.train_dir):
-    tf.gfile.DeleteRecursively(FLAGS.train_dir)
+  #if tf.gfile.Exists(FLAGS.train_dir):
+  #  tf.gfile.DeleteRecursively(FLAGS.train_dir)
   tf.gfile.MakeDirs(FLAGS.train_dir)
   train()
 
