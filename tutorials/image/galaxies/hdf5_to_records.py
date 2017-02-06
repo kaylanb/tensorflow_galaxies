@@ -26,7 +26,10 @@ import tensorflow as tf
 
 from tensorflow.contrib.learn.python.learn.datasets import mnist
 
-FLAGS = None
+# Flags for defining the tf.train.Server
+#tf.app.flags.DEFINE_string("directory", "hello", "One of 'ps', 'worker'")
+#tf.app.flags.DEFINE_integer("validation_size", 100, "Index of task within the job")
+#FLAGS = tf.app.flags.FLAGS
 
 
 def _int64_feature(value):
@@ -70,17 +73,99 @@ def convert_to(data_set, name):
   writer.close()
 
 
+def add_invvar(stamp_ivar,img_ivar):
+    '''stamp_ivar, img_ivar -- galsim Image objects'''
+    # Use img_ivar when stamp_ivar == 0, both otherwise
+    use_img_ivar= np.ones(img_ivar.shape).astype(bool)
+    use_img_ivar[ stamp_ivar > 0 ] = False
+    # Compute using both
+    ivar= np.power(stamp_ivar.copy(), -1) + np.power(img_ivar.copy(), -1)
+    ivar= np.power(ivar,-1)
+    keep= np.ones(ivar.shape).astype(bool)
+    keep[ (stamp_ivar > 0)*\
+          (img_ivar > 0) ] = False
+    ivar[keep] = 0.
+    # Now use img_ivar only where need to
+    ivar[ use_img_ivar ] = img_ivar.copy()[ use_img_ivar ]
+    return ivar
+
+class BuildTraining(object):
+    """
+    Takes hdf5 file created by GatherTraining and saves as single N-Dim array
+    that will be converted to tensorflow format 
+    """ 
+        
+    def __init__(self,data_dir=None):
+		assert(not data_dir is None)
+		self.data_dir= data_dir
+        self.f= h5py.File(os.path.join(self.data_dir,'training_10k.hdf5'),'r')
+
+    def create_srcpimage(self,use_ivar=False):
+		if use_ivar:
+			savefn= os.path.join(self.data_dir,'training_10k_ivar.hdf5')
+		else:	
+			savefn= os.path.join(self.data_dir,'training_10k_noivar.hdf5')
+		fobj= h5py.File(savefn,'a')
+		node= '/srcpimg'
+		if not node in fobj:
+			if use_ivar:	
+				data= np.zeros(10000,200,200,3).astype(np.float32)+np.nan
+			else:
+				data= np.zeros(10000,200,200,6).astype(np.float32)+np.nan
+			label= np.zeros(10000).astype(str)
+			for cnt,id in enumerate(self.f.keys()):
+				for obj in ['elg','lrg']:
+					print(self.f['/%s/%s' % (id,obj)].shape)
+					img= src+back
+					if use_invvar:
+						ivar= add_invvar(src_ivar,back_ivar)
+				if cnt > 5: break
+			assert( np.where( np.isfinite(data).flatten() == False )[0].size == 0)
+			dset = fobj.create_dataset('%s/images' % node, data=data,chunks=True)
+			dset = fobj.create_dataset('%s/labels' % node, data=label,chunks=True)
+		print('srcpimage_noivar has been created')
+		return fobj
+
+	def get_srcpimage(self,use_ivar=False):
+		fobj= self.create_srcpimage(use_ivar=use_ivar)
+		return fobj['/srcpimg/images'],fobj['/srcpimg/labels']
+
 def main(unused_argv):
   # Get the data.
-  data_sets = mnist.read_data_sets(FLAGS.directory,
-                                   dtype=tf.uint8,
-                                   reshape=False,
-                                   validation_size=FLAGS.validation_size)
+  #data_sets = mnist.read_data_sets(FLAGS.directory,
+  #                                 dtype=tf.uint8,
+  #                                 reshape=False,
+  #                                 validation_size=FLAGS.validation_size)
+  builder= BuildTraining(data_dir=FLAGS.directory)
+  images,labels= builder.get_srcpimage(use_ivar=FLAGS.use_ivar)
   raise ValueError
+  # Python3 h5py containers arg!
+  #keys= list(fobj.keys())
+  #keys2= list(fobj[keys[0]].keys())
+  #fobj['/95941990/elg'].shape
+  #fobj['/*/elg'].shape
+
+  # Shuffle samples
+  inds= np.shuffle(range(dset.shape[0]))
+  keep={}
+  keep['test']= inds[ :FLAGS.test_size ]
+  keep['val']= inds[ FLAGS.test_size:FLAGS.val_size ]
+  keep['train']= inds[ FLAGS.test_size+FLAGS.val_size: ]
+  for key,sz in zip(['test','val','train'],[1000,1000,8000]):
+	assert(keep[key].size == sz)
+  # data set object
+  class DataSet(object):
+    def __init__(self,images,labels,keep):
+		self.images= images[keep]
+		self.labels= labels[keep]
+		self.data_set.num_examples = keep.size
+  data={}
+  for key in keep.keys():
+    data[key]= DataSet(images,labels,keep[key])
   # Convert to Examples and write the result to TFRecords.
-  convert_to(data_sets.train, 'train')
-  convert_to(data_sets.validation, 'validation')
-  convert_to(data_sets.test, 'test')
+  convert_to(data['train'], 'train')
+  convert_to(data['val'], 'validation')
+  convert_to(data['test'], 'test')
 
 
 if __name__ == '__main__':
@@ -88,17 +173,35 @@ if __name__ == '__main__':
   parser.add_argument(
       '--directory',
       type=str,
-      default='/tmp/data',
+      default='/Users/kaylan1/tensorflow/galaxies/data_dir',
       help='Directory to download data files and write the converted result'
   )
   parser.add_argument(
-      '--validation_size',
+      '--val_size',
       type=int,
-      default=5000,
+      default=1000,
       help="""\
       Number of examples to separate from the training data for the validation
       set.\
       """
   )
+  parser.add_argument(
+      '--test_size',
+      type=int,
+      default=1000,
+      help="""\
+      Number of examples to separate from the training data for the validation
+      set.\
+      """
+  )
+  parser.add_argument(
+      '--use_ivar',
+      action='store_true',
+      help="""\
+      put invvar in the samples\
+      """
+  )
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+
+

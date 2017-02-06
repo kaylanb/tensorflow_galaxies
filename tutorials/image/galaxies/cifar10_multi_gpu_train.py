@@ -230,7 +230,8 @@ def train():
     sess.run(init)
 
     # Start the queue runners.
-    tf.train.start_queue_runners(sess=sess)
+    #coord=tf.train.Coordinator() #see: https://www.tensorflow.org/how_tos/reading_data/
+    tf.train.start_queue_runners(sess=sess) #coord=coord)
 
     summary_writer = tf.summary.FileWriter(FLAGS.train_dir, sess.graph)
 
