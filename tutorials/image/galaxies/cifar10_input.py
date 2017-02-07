@@ -41,7 +41,7 @@ tf.app.flags.DEFINE_boolean('log_device_placement', False,
 # Global constants describing the CIFAR-10 data set.
 tf.app.flags.DEFINE_integer('IMAGE_SIZE', 200,"""""")
 tf.app.flags.DEFINE_integer('NUM_CLASSES', 5,"""""")
-tf.app.flags.DEFINE_integer('NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN', 10,"""""")
+tf.app.flags.DEFINE_integer('NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN', 2602,"""""")
 tf.app.flags.DEFINE_integer('NUM_EXAMPLES_PER_EPOCH_FOR_EVAL', 100,"""""")
 # Constants describing the training process.
 tf.app.flags.DEFINE_float('MOVING_AVERAGE_DECAY', 0.9999,"""""") # The decay to use for the moving average.
@@ -56,18 +56,6 @@ tf.app.flags.DEFINE_string('TOWER_NAME', 'tower',"""""")
 FLAGS = tf.app.flags.FLAGS
 
 
-
-# Process images of this size. Note that this differs from the original CIFAR
-# image size of 32 x 32. If one alters this number, then the entire model
-# architecture will change and any model would need to be retrained.
-IMAGE_SIZE = 200
-IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
-
-# Global constants describing the CIFAR-10 data set.
-NUM_CLASSES = 5
-NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 2620
-NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 200
-
 def read_and_decode(filename_queue):
   '''Reading a TFRecord created by converting from another data format
   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/how_tos/reading_data/fully_connected_reader.py
@@ -76,21 +64,22 @@ def read_and_decode(filename_queue):
   _, serialized_example = reader.read(filename_queue)
   features = tf.parse_single_example(
       serialized_example,
-      # Defaults are not specified since both keys are required.
-      features={
-          'image_raw': tf.FixedLenFeature([], tf.string),
-          'label': tf.FixedLenFeature([], tf.int64),
-      })
+	  features={'height': tf.FixedLenFeature([], tf.int64),\
+				'width': tf.FixedLenFeature([], tf.int64),\
+				'depth': tf.FixedLenFeature([], tf.int64),\
+				'label': tf.FixedLenFeature([], tf.int64),\
+				'image_raw': tf.FixedLenFeature([], tf.string)}
+	)
 
   # Convert from a scalar string tensor (whose single string has
   # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
   # [mnist.IMAGE_PIXELS].
   image = tf.decode_raw(features['image_raw'], tf.float32)
-  raise ValueError
-  #image.set_shape([IMAGE_PIXELS])
+  #image.set_shape([FLAGS.IMAGE_SIZE,FLAGS.IMAGE_SIZE,3])
 
   # Convert label from a scalar uint8 tensor to an int32 scalar.
   label = tf.cast(features['label'], tf.int32)
+  raise ValueError
 
   return image, label
 
@@ -134,14 +123,21 @@ def inputs(train=None, batch_size=None, num_epochs=None,\
 		# queue.
 		image, label = read_and_decode(filename_queue)
 		raise ValueError
+
+		# Ensure that the random shuffling has good mixing properties.
+		min_fraction_of_examples_in_queue = 0.4
+		min_queue_examples = int(FLAGS.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN *
+							     min_fraction_of_examples_in_queue)
+		print ('Filling queue with %d CIFAR images before starting to train. '
+			 'This will take a few minutes.' % min_queue_examples)
+
 		# Shuffle the examples and collect them into batch_size batches.
 		# (Internally uses a RandomShuffleQueue.)
 		# We run this in two threads to avoid being a bottleneck.
 		images, sparse_labels = tf.train.shuffle_batch(
 			[image, label], batch_size=batch_size, num_threads=2,
-			capacity=500 + 3 * batch_size,
-			# Ensures a minimum amount of shuffling of examples.
-			min_after_dequeue=500)
+			capacity=min_queue_examples + 3 * batch_size,
+			min_after_dequeue=min_queue_examples)
 
 	return images, sparse_labels
 

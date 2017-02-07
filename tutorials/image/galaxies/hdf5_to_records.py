@@ -43,7 +43,8 @@ def _bytes_feature(value):
 def convert_to(data_set, savename='test'):
 	"""Converts a dataset to tfrecords."""
 	filename = os.path.join(FLAGS.data_dir, savename + '.tfrecords')
-	if not os.path.exists(filename):
+	#if not os.path.exists(filename):
+	if os.path.exists(filename):
 		# Nsample x 200 x 200 x 3 numpy array of type float32
 		images = data_set.images
 		# Nsample numpy array of type uint8
@@ -56,10 +57,10 @@ def convert_to(data_set, savename='test'):
 		rows = images.shape[1]
 		cols = images.shape[2]
 		depth = images.shape[3]
-
+		raise ValueError
 		writer = tf.python_io.TFRecordWriter(filename)
 		for index in range(num_examples):
-			image_raw = images[index].tostring()
+			image_raw = images[index,...].tostring()
 			example = tf.train.Example(features=tf.train.Features(feature={
 					'height': _int64_feature(rows),
 					'width': _int64_feature(cols),
