@@ -40,6 +40,7 @@ tf.app.flags.DEFINE_boolean('log_device_placement', False,
                             """Whether to log device placement.""")
 # Global constants describing the CIFAR-10 data set.
 tf.app.flags.DEFINE_integer('IMAGE_SIZE', 200,"""""")
+tf.app.flags.DEFINE_integer('IMAGE_DEPTH', 3,"""""")
 tf.app.flags.DEFINE_integer('NUM_CLASSES', 5,"""""")
 tf.app.flags.DEFINE_integer('NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN', 2602,"""""")
 tf.app.flags.DEFINE_integer('NUM_EXAMPLES_PER_EPOCH_FOR_EVAL', 100,"""""")
@@ -64,22 +65,26 @@ def read_and_decode(filename_queue):
   _, serialized_example = reader.read(filename_queue)
   features = tf.parse_single_example(
       serialized_example,
-	  features={'height': tf.FixedLenFeature([], tf.int64),\
-				'width': tf.FixedLenFeature([], tf.int64),\
-				'depth': tf.FixedLenFeature([], tf.int64),\
-				'label': tf.FixedLenFeature([], tf.int64),\
-				'image_raw': tf.FixedLenFeature([], tf.string)}
+	  features={'label': tf.FixedLenFeature([], tf.int64),\
+				'image': tf.FixedLenFeature([], tf.string)}
 	)
+	#'height': tf.FixedLenFeature([], tf.int64),\
+	#'width': tf.FixedLenFeature([], tf.int64),\
+	#'depth': tf.FixedLenFeature([], tf.int64),\
 
   # Convert from a scalar string tensor (whose single string has
   # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
   # [mnist.IMAGE_PIXELS].
-  image = tf.decode_raw(features['image_raw'], tf.float32)
+  #image = tf.decode_raw(features['image'], tf.float32)
   #image.set_shape([FLAGS.IMAGE_SIZE,FLAGS.IMAGE_SIZE,3])
+  #image_bytes= 4 * FLAGS.IMAGE_SIZE * FLAGS.IMAGE_SIZE * FLAGS.IMAGE_DEPTH 
+  image_bytes= FLAGS.IMAGE_SIZE * FLAGS.IMAGE_SIZE * FLAGS.IMAGE_DEPTH 
+  record = tf.reshape(tf.decode_raw(features['image'], tf.float32), [image_bytes])
+  shap= [FLAGS.IMAGE_SIZE,FLAGS.IMAGE_SIZE,FLAGS.IMAGE_DEPTH]
+  image = tf.cast( tf.reshape(record,shap), tf.float32)
 
   # Convert label from a scalar uint8 tensor to an int32 scalar.
-  label = tf.cast(features['label'], tf.int32)
-  raise ValueError
+  label = tf.cast(features['label'], tf.int8)
 
   return image, label
 
@@ -117,12 +122,11 @@ def inputs(train=None, batch_size=None, num_epochs=None,\
 			raise ValueError('Failed to find file: ' + f)
 
 	with tf.name_scope('input'):
-		filename_queue = tf.train.string_input_producer(filenames,\
-														num_epochs=num_epochs)
+		# Creates a QueueRunner
+		filename_queue = tf.train.string_input_producer(filenames) #num_epochs=num_epochs)
 		# Even when reading in multiple threads, share the filename
 		# queue.
 		image, label = read_and_decode(filename_queue)
-		raise ValueError
 
 		# Ensure that the random shuffling has good mixing properties.
 		min_fraction_of_examples_in_queue = 0.4

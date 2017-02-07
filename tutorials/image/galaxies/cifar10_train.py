@@ -57,7 +57,6 @@ def train():
 
     # Build a Graph that computes the logits predictions from the
     # inference model.
-    raise ValueError
     logits = cifar10.inference(images)
 
     # Calculate loss.
