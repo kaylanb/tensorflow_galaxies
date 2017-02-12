@@ -41,12 +41,13 @@ NUM_CLASSES = 10
 IMAGE_SIZE = 28
 IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
 
-class TrainingProps(object):
+class TrainingExamples(object):
 	def __init__(self):
+		self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
 		self.num_bands= 3 #grz
 		self.image_size= 64 
 
-class HyperParams(TrainingProps):
+class HyperParams(TrainingExamples):
 	def __init__(self):
 		super(HyperParams,).__init__()
 		self.conv1= self.conv1_dict()
@@ -362,8 +363,24 @@ def main():
   #read your data
   # invvar --> var - mean() and setting bad pixels some high << 2^32 value
   # but could just use bad pixel map for now
-  x_= galaxy images # instances x n_rotations x 6 x 64 x 64
-  y_= galaxy/start/etc # instances
+  train_obj= TrainingExamples()
+  fobj= h5py.File(os.path.join(train_obj.data_dir,'training_gathered_all.hdf5'),'r')
+  # FIX ME!! need to ensure background ids match star,qso ids...
+  # FIX ME: Add in variances!
+  x_ np.concatenate( (fobj['elg'] + fobj['back'],\ # instances (2500) x n_rotations(none) x 64 x 64 x 3
+					  fobj['star'] + fobj['back'],\
+					  fobj['qso'] + fobj['back'],\
+					  fobj['back']),axis=0)
+  d= dict(star=0,qso=1,elg=2,back=3)
+  y_= np.concatenate( (np.zeros(fobj['elg'].shape[0]).astype(np.int32)+d['elg'],\ # instances
+					   np.zeros(fobj['star'].shape[0]).astype(np.int32)+d['star'],\
+					   np.zeros(fobj['qso'].shape[0]).astype(np.int32)+d['qso'],\
+					   np.zeros(fobj['back'].shape[0]).astype(np.int32)+d['back']),axis=0)
+  # Shuffle
+ 
+  #
+  raise ValueError 
+  x_=  
   q_ = type of night #instances integer, make only 1 type night for now
   b_= backgrounds # type x b_instances x 6 x 64 x 64
 

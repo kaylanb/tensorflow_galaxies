@@ -56,6 +56,20 @@ tf.app.flags.DEFINE_string('TOWER_NAME', 'tower',"""""")
 
 FLAGS = tf.app.flags.FLAGS
 
+#########
+data_initializer = tf.placeholder(dtype=training_data.dtype,
+                                    shape=training_data.shape)
+  label_initializer = tf.placeholder(dtype=training_labels.dtype,
+                                     shape=training_labels.shape)
+  input_data = tf.Variable(data_initializer, trainable=False, collections=[])
+  input_labels = tf.Variable(label_initializer, trainable=False, collections=[])
+  ...
+  sess.run(input_data.initializer,
+           feed_dict={data_initializer: training_data})
+  sess.run(input_labels.initializer,
+           feed_dict={label_initializer: training_labels})
+
+
 
 def read_and_decode(filename_queue):
   '''Reading a TFRecord created by converting from another data format
