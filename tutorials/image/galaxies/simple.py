@@ -31,60 +31,70 @@ from __future__ import division
 from __future__ import print_function
 
 import math
-
+import h5py
+import os
+import numpy as np
+from argparse import ArgumentParser
+import re
+import time
 import tensorflow as tf
 
-# The MNIST dataset has 10 classes, representing the digits 0 through 9.
-NUM_CLASSES = 10
-
-# The MNIST images are always 28x28 pixels.
-IMAGE_SIZE = 28
-IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
+TOWER_NAME = 'tower'
 
 class TrainingExamples(object):
-	def __init__(self):
-		self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
-		self.num_bands= 3 #grz
-		self.image_size= 64 
+    def __init__(self):
+        self.data_fn= 'training_gathered_1000.hdf5'
+        self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
+        self.num_bands= 3 #grz
+        self.image_size= 64 
+        self.num_classes= 4 
+        self.n_val= 500 #validation size
+        self.batch= 128 # batch size
+        self.epochs= 10 
 
 class HyperParams(TrainingExamples):
-	def __init__(self):
-		super(HyperParams,).__init__()
-		self.conv1= self.conv1_dict()
-		self.conv2= self.conv2_dict()
-		self.lrn= self.local_response_norm()
-		self.pool_strides= self.max_pool_strides()
-		self.fully_conn= self.fully_connected_layers()
+    def __init__(self,debug=False):
+        super(HyperParams,self).__init__()
+        if debug: 
+            self.data_fn= 'training_gathered_small.hdf5'
+            self.n_val= 10 #validation size
+            self.batch= 20 # batch size
+        self.learnrate=0.1 # cifar10
+        self.conv1= self.conv1_dict()
+        self.conv2= self.conv2_dict()
+        self.lrn= self.local_response_norm()
+        self.pool_strides= self.max_pool_strides()
+        self.fully_conn= self.fully_connected_layers()
 
-	def conv1_dict(self):
-		return dict(filter_size= 5,
-								in_channels= self.num_bands,
-								out_channels= 64)
+    def conv1_dict(self):
+        return dict(filter_size= 5,
+                                in_channels= self.num_bands,
+                                out_channels= 64)
 
-	def conv2_dict(self):
-		return dict(filter_size= 5,
-								in_channels= self.conv1['out_channels'],
-								out_channels=64)
+    def conv2_dict(self):
+        return dict(filter_size= 5,
+                                in_channels= self.conv1['out_channels'],
+                                out_channels=64)
 
-	def local_response_norm(self):
-		return dict(depth_radius= 4, # default 5
-								bias= 1., #default 1,
-								alpha= 0.001 / 9.0, #default 1
-					      beta= 0.75 #default 0.5
-							 )
+    def local_response_norm(self):
+        return dict(depth_radius= 4, # default 5
+                                bias= 1., #default 1,
+                                alpha= 0.001 / 9.0, #default 1
+                          beta= 0.75 #default 0.5
+                             )
 
-	def max_pool_strides(self):
-		return [1,2,2,1]
+    def max_pool_strides(self):
+        return [1,2,2,1]
 
-	def fully_connected_layers(self):
+    def fully_connected_layers(self):
     # Cifar10 ex set layer size to pool2 feat map size * num_feat maps
-		# We did two max_pools...
-    first= int( self.image_size / self.pool_strides[1]**2 * self.conv2['out_channels'] )
-		# Cifar10 did half this for second layer
-		second= first/2
-		assert(second % 2 == 0)
-		return dict(first=first,\
-								second=second)
+        # We did two max_pools...
+        first= int( self.image_size / self.pool_strides[1]**2 * self.conv2['out_channels'] )
+        # Cifar10 did half this for second layer
+        second= first/2
+        assert(second % 2 == 0)
+        return dict(first=first,\
+                    second=second)
 
 
 def _variable_on_cpu(name, shape, initializer):
@@ -130,6 +140,27 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
     tf.add_to_collection('losses', weight_decay)
   return var
 
+def _activation_summary(x):
+  """Helper to create summaries for activations.
+
+  Creates a summary that provides a histogram of activations.
+  Creates a summary that measures the sparsity of activations.
+
+  Args:
+    x: Tensor
+  Returns:
+    nothing
+  """
+  # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
+  # session. This helps the clarity of presentation on tensorboard.
+  tensor_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', x.op.name)
+  #tf.contrib.deprecated.histogram_summary(tensor_name + '/activations', x)
+  #tf.contrib.deprecated.scalar_summary(tensor_name + '/sparsity',
+  #                                     tf.nn.zero_fraction(x))
+  tf.summary.histogram(tensor_name + '/activations', x)
+  tf.summary.scalar(tensor_name + '/sparsity',
+                    tf.nn.zero_fraction(x))
+
 
 
 def inference(images, hyper=None):
@@ -151,8 +182,8 @@ def inference(images, hyper=None):
   with tf.variable_scope('conv1') as scope:
     kernel = _variable_with_weight_decay('weights',
                                          shape=[hyper.conv1['filter_size'],hyper.conv1['filter_size'], \
-																								hyper.conv1['in_channels'],hyper.conv1['out_channels'],
-                                         stddev=5e-2,
+                                                hyper.conv1['in_channels'],hyper.conv1['out_channels']],\
+                                         stddev=5e-2,\
                                          wd=0.0)
     conv = tf.nn.conv2d(images, kernel, [1, 1, 1, 1], padding='SAME')
     biases = _variable_on_cpu('biases', [hyper.conv1['out_channels']], tf.constant_initializer(0.0))
@@ -165,15 +196,15 @@ def inference(images, hyper=None):
                          padding='SAME', name='pool1')
   # norm1
   norm1 = tf.nn.local_response_normalization(pool1, hyper.lrn['depth_radius'],\
-												bias=hyper.lrn['bias'], alpha=hyper.lrn['alpha'], beta=hyper.lrn['beta'],\
-												name='norm1')
+											 bias=hyper.lrn['bias'], alpha=hyper.lrn['alpha'], beta=hyper.lrn['beta'],\
+                                             name='norm1')
 
   # conv2
   with tf.variable_scope('conv2') as scope:
     kernel = _variable_with_weight_decay('weights',
                                          shape=[hyper.conv2['filter_size'],hyper.conv2['filter_size'], \
-																								hyper.conv2['in_channels'],hyper.conv2['out_channels'],
-                                         stddev=5e-2,
+												hyper.conv2['in_channels'],hyper.conv2['out_channels']],\
+                                         stddev=5e-2,\
                                          wd=0.0)
     conv = tf.nn.conv2d(norm1, kernel, [1, 1, 1, 1], padding='SAME')
     biases = _variable_on_cpu('biases', [hyper.conv2['out_channels']], tf.constant_initializer(0.1))
@@ -193,7 +224,7 @@ def inference(images, hyper=None):
   # local3
   with tf.variable_scope('local3') as scope:
     # Move everything into depth so we can perform a single matrix multiply.
-    reshape = tf.reshape(pool2, [FLAGS.batch_size, -1])
+    reshape = tf.reshape(pool2, [hyper.batch, -1])
     dim = reshape.get_shape()[1].value
     weights = _variable_with_weight_decay('weights', shape=[dim, hyper.fully_conn['first'] ],
                                           stddev=0.04, wd=0.004)
@@ -203,7 +234,8 @@ def inference(images, hyper=None):
 
   # local4
   with tf.variable_scope('local4') as scope:
-    weights = _variable_with_weight_decay('weights', shape=[size_layer, hyper.fully_conn['second'] ],
+    weights = _variable_with_weight_decay('weights', shape=[hyper.fully_conn['first'], \
+                                                            hyper.fully_conn['second'] ],
                                           stddev=0.04, wd=0.004)
     biases = _variable_on_cpu('biases', [ hyper.fully_conn['second'] ], tf.constant_initializer(0.1))
     local4 = tf.nn.relu(tf.matmul(local3, weights) + biases, name=scope.name)
@@ -214,9 +246,9 @@ def inference(images, hyper=None):
   # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
   # and performs the softmax internally for efficiency.
   with tf.variable_scope('softmax_linear') as scope:
-    weights = _variable_with_weight_decay('weights', [, FLAGS.NUM_CLASSES],
+    weights = _variable_with_weight_decay('weights', [hyper.fully_conn['second'], hyper.num_classes],
                                           stddev=1/float(hyper.fully_conn['second']), wd=0.0)
-    biases = _variable_on_cpu('biases', [FLAGS.NUM_CLASSES],
+    biases = _variable_on_cpu('biases', [hyper.num_classes],
                               tf.constant_initializer(0.0))
     softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
     _activation_summary(softmax_linear)
@@ -226,7 +258,7 @@ def inference(images, hyper=None):
 
 
 
-def loss(logits, labels):
+def cross_entropy_loss(logits, labels):
   """Calculates the loss from the logits and the labels.
 
   Args:
@@ -243,13 +275,13 @@ def loss(logits, labels):
   tf.add_to_collection('losses', cross_entropy_mean)
   # The total loss is defined as the cross entropy loss plus all of the weight
   # decay terms (L2 loss).
-  return tf.add_n(tf.get_collection('losses'), name='total_loss')
+  return tf.add_n(tf.get_collection('losses'), name='loss')
   # MNIST:
   #cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
   #    labels=labels, logits=logits, name='xentropy')
   #return tf.reduce_mean(cross_entropy, name='xentropy_mean')
 
-def train(total_loss, global_step):
+def training(loss, global_step, learnrate=None):
   """Train CIFAR-10 model.
 
   Create an optimizer and apply to all trainable variables. Add moving
@@ -262,61 +294,59 @@ def train(total_loss, global_step):
   Returns:
     train_op: op for training.
   """
-  # Variables that affect learning rate.
-  num_batches_per_epoch = FLAGS.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
-  decay_steps = int(num_batches_per_epoch * FLAGS.NUM_EPOCHS_PER_DECAY)
-
-  # Decay the learning rate exponentially based on the number of steps.
-  lr = tf.train.exponential_decay(FLAGS.INITIAL_LEARNING_RATE,
-                                  global_step,
-                                  decay_steps,
-                                  FLAGS.LEARNING_RATE_DECAY_FACTOR,
-                                  staircase=True)
-  tf.summary.scalar('learning_rate', lr)
-
-  # Generate moving averages of all losses and associated summaries.
-  loss_averages_op = _add_loss_summaries(total_loss)
-
-  # Compute gradients.
-  with tf.control_dependencies([loss_averages_op]):
-    opt = tf.train.GradientDescentOptimizer(lr)
-    grads = opt.compute_gradients(total_loss)
-
-  # Apply gradients.
-  apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
-
-  # Add histograms for trainable variables.
-  for var in tf.trainable_variables():
-    tf.summary.histogram(var.op.name, var)
-
-  # Add histograms for gradients.
-  for grad, var in grads:
-    if grad is not None:
-      tf.summary.histogram(var.op.name + '/gradients', grad)
-
-  # Track the moving averages of all trainable variables.
-  variable_averages = tf.train.ExponentialMovingAverage(
-      FLAGS.MOVING_AVERAGE_DECAY, global_step)
-  variables_averages_op = variable_averages.apply(tf.trainable_variables())
-
-  with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
-    train_op = tf.no_op(name='train')
-
+  # Simple verion
+  # Add a scalar summary for the snapshot loss.
+  tf.summary.scalar('loss', loss)
+  # Create the gradient descent optimizer with the given learning rate.
+  optimizer = tf.train.GradientDescentOptimizer(learnrate)
+  # Use the optimizer to apply the gradients that minimize the loss
+  # (and also increment the global step counter) as a single training step.
+  train_op = optimizer.minimize(loss, global_step=global_step)
   return train_op
-  # MNIST simpler verions
-  ## Add a scalar summary for the snapshot loss.
-  #tf.summary.scalar('loss', loss)
-  ## Create the gradient descent optimizer with the given learning rate.
-  #optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-  ## Create a variable to track the global step.
-  #global_step = tf.Variable(0, name='global_step', trainable=False)
-  ## Use the optimizer to apply the gradients that minimize the loss
-  ## (and also increment the global step counter) as a single training step.
-  #train_op = optimizer.minimize(loss, global_step=global_step)
+
+  # Variables that affect learning rate.
+  #num_batches_per_epoch = FLAGS.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
+  #decay_steps = int(num_batches_per_epoch * FLAGS.NUM_EPOCHS_PER_DECAY)
+
+  ## Decay the learning rate exponentially based on the number of steps.
+  #lr = tf.train.exponential_decay(FLAGS.INITIAL_LEARNING_RATE,
+  #                                global_step,
+  #                                decay_steps,
+  #                                FLAGS.LEARNING_RATE_DECAY_FACTOR,
+  #                                staircase=True)
+  #tf.summary.scalar('learning_rate', lr)
+
+  ## Generate moving averages of all losses and associated summaries.
+  #loss_averages_op = _add_loss_summaries(total_loss)
+
+  ## Compute gradients.
+  #with tf.control_dependencies([loss_averages_op]):
+  #  opt = tf.train.GradientDescentOptimizer(lr)
+  #  grads = opt.compute_gradients(total_loss)
+
+  ## Apply gradients.
+  #apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
+
+  ## Add histograms for trainable variables.
+  #for var in tf.trainable_variables():
+  #  tf.summary.histogram(var.op.name, var)
+
+  ## Add histograms for gradients.
+  #for grad, var in grads:
+  #  if grad is not None:
+  #    tf.summary.histogram(var.op.name + '/gradients', grad)
+
+  ## Track the moving averages of all trainable variables.
+  #variable_averages = tf.train.ExponentialMovingAverage(
+  #    FLAGS.MOVING_AVERAGE_DECAY, global_step)
+  #variables_averages_op = variable_averages.apply(tf.trainable_variables())
+
+  #with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
+  #  train_op = tf.no_op(name='train')
+
   #return train_op
 
-
-def evaluation(logits, labels):
+def accuracy_on_valdata(logits, labels):
   """Evaluate the quality of the logits at predicting the label.
 
   Args:
@@ -334,112 +364,121 @@ def evaluation(logits, labels):
   # the examples where the label is in the top k (here k=1)
   # of all logits for that example.
   #correct = tf.nn.in_top_k(logits, labels, 1)
-  correct = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
+  correct_bool = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
   # Return the number of true entries.
   # I think this is an average over the batches?
-  return tf.reduce_sum(tf.cast(correct, tf.int32))
+  return tf.reduce_sum(tf.cast(correct_bool, tf.int32))
+  #return tf.div(num_corr, tf.cast(correct_bool.get_shape()[0], tf.float32) )
 
 
 
-def get_samples(x_,#instances x 6 x 64 x 64
-                y_,#instances 
-                b_,#type x b_instances x 6 x 64 x 64
-                q_,
-                batch_size=128):
-
-    for i in range(x_.shape[0]/batch_size):
+def get_samples(x_,y_, batch_size=None): 
+                #b_,#type x b_instances x 6 x 64 x 64
+                #q_,
+                #batch_size=128):
+    '''
+    x_ : instances x 6 x 64 x 64
+    y_ : instances
+    '''
+    n_batches= int(x_.shape[0]/batch_size)
+    for i in range(n_batches):
         ind = np.random.randint(0,x_.shape[0], batch_size)
-        bind = np.random.randint(0,b_.shape[0], batch_size)
+        #bind = np.random.randint(0,b_.shape[0], batch_size)
 		# variance of stamp is sqrt(stamp^2) if want to use that
-        xt = x_[ind]
-        yb_ = yt_[ind]        
-        ind_types = q_[ind]
-        bb_ = xt_[ind_types,bind,...]
-        if np.random.rand() > .5: 
-            xb_ = xb[:,:,::-1,:] #indecies are wrong!
-        yield xb_, yb_, bb_
+        xb_ = x_[ind]
+        yb_ = y_[ind]        
+        #ind_types = q_[ind]
+        #bb_ = b_[ind_types,bind,...]
+        #if np.random.rand() > .5: 
+        #    xb_ = xb[:,:,::-1,:] #indecies are wrong!
+        yield i,xb_, yb_ #, bb_
 
-def main():
-  #read your data
-  # invvar --> var - mean() and setting bad pixels some high << 2^32 value
-  # but could just use bad pixel map for now
-  train_obj= TrainingExamples()
-  fobj= h5py.File(os.path.join(train_obj.data_dir,'training_gathered_all.hdf5'),'r')
-  # FIX ME!! need to ensure background ids match star,qso ids...
-  # FIX ME: Add in variances!
-  x_ np.concatenate( (fobj['elg'] + fobj['back'],\ # instances (2500) x n_rotations(none) x 64 x 64 x 3
-					  fobj['star'] + fobj['back'],\
-					  fobj['qso'] + fobj['back'],\
-					  fobj['back']),axis=0)
-  d= dict(star=0,qso=1,elg=2,back=3)
-  y_= np.concatenate( (np.zeros(fobj['elg'].shape[0]).astype(np.int32)+d['elg'],\ # instances
-					   np.zeros(fobj['star'].shape[0]).astype(np.int32)+d['star'],\
-					   np.zeros(fobj['qso'].shape[0]).astype(np.int32)+d['qso'],\
-					   np.zeros(fobj['back'].shape[0]).astype(np.int32)+d['back']),axis=0)
-  # Shuffle
- 
-  #
-  raise ValueError 
-  x_=  
-  q_ = type of night #instances integer, make only 1 type night for now
-  b_= backgrounds # type x b_instances x 6 x 64 x 64
+def main(args=None):
+    # Config
+    hp= HyperParams(debug=args.debug)
+    # Read data
+    print(os.path.join(hp.data_dir,hp.data_fn))
+    fobj= h5py.File(os.path.join(hp.data_dir,hp.data_fn),'r')
+    # FIX ME!! need to ensure background ids match star,qso ids...
+    # FIX ME: Add in variances!
+    # FIX ME! invvar --> var - mean() and setting bad pixels some high << 2^32 value
+    # FIX ME! could just use bad pixel map for now
+    print('Loading Data')
+    # instances (2500) x n_rotations(none) x 64 x 64 x 3 
+    x_= np.concatenate( (fobj['elg'][:] + fobj['back'][:],\
+                       fobj['star'][:] + fobj['back'][:],\
+                       fobj['qso'][:] + fobj['back'][:],\
+                       fobj['back'][:]),axis=0)
+    d= dict(star=0,qso=1,elg=2,back=3)
+    y_= np.concatenate( (np.zeros(fobj['elg'].shape[0]).astype(np.int32)+d['elg'],\
+                       np.zeros(fobj['star'].shape[0]).astype(np.int32)+d['star'],\
+                       np.zeros(fobj['qso'].shape[0]).astype(np.int32)+d['qso'],\
+                       np.zeros(fobj['back'].shape[0]).astype(np.int32)+d['back']),axis=0)
+    #q_ = type of night #instances integer, make only 1 type night for now
+    #b_= backgrounds # type x b_instances x 6 x 64 x 64
+    # Shuffle, split train vs. val
+    ind= np.arange(x_.shape[0]).astype(int)
+    np.random.shuffle(ind)
+    xval_= x_[ ind[:hp.n_val],...]
+    yval_= y_[ ind[:hp.n_val],...]
+    x_= x_[ ind[hp.n_val:],...]
+    y_= y_[ ind[hp.n_val:],...]
+    assert(x_.shape[0] > xval_.shape[0])
+    with tf.Graph().as_default():
+        print('Building Graph')
+        # Generate placeholders for the images and labels.
+        x = tf.placeholder(tf.float32, shape=[hp.batch, 64, 64, 3])
+        y = tf.placeholder(tf.int32, shape=[hp.batch])
+        #b = placeholder(tf.float32, shape=[10, None])
+        #x = x + b
 
-  with tf.Graph().as_default():
-      # Generate placeholders for the images and labels.
-    x = placeholder_inputs(shape=[10, None, 6, 64, 64], dtype=tf.float32)
-    y = placeholder_inputs(shape=[10, None], dtype=tf.int32)
-    b = placeholder_inputs(shape=[10, None], dtype=tf.int32)
-    x = x + b
-	  # config
-    hp= HyperParams()
-    
-    global_step = tf.contrib.framework.get_or_create_global_step()
-    
-	#xall = variable(x_)
-    #index = placeholder_inputs(shape=[None], dtype=int32)
-    # Build a Graph that computes predictions from the inference model.
-    logits = inference(x, hyper=hp)
-                             #100,
-                             #100, 10)
+        global_step = tf.contrib.framework.get_or_create_global_step()
 
-    # Add to the Graph the Ops for loss calculation.
-    loss = loss(logits, y)
+        # CNN Infrastructure
+        logits = inference(x, hyper=hp)
+                                 #100,
+                                 #100, 10)
 
-    # Add to the Graph the Ops that calculate and apply gradients.
-    train_op = training(loss, global_step)
-    
-    # Add the Op to compare the logits to the labels during evaluation.
-    eval_correct = evaluation(logits, labels_placeholder) #using sparse_softmax_cross_entropy_with_logits
+        # Add to the Graph the Ops for loss calculation.
+        loss= cross_entropy_loss(logits, y)
 
-    # Add the variable initializer Op.
-    init = tf.global_variables_initializer()
+        # Add to the Graph the Ops that calculate and apply gradients.
+        train_op = training(loss, global_step, learnrate=hp.learnrate)
 
+        # Add the Op to compare the logits to the labels during evaluation.
+        #using sparse_softmax_cross_entropy_with_logits
+        accuracy = accuracy_on_valdata(logits, y) 
 
-    # Create a session for running Ops on the Graph.
-    sess = tf.Session()
+        # Add the variable initializer Op.
+        init = tf.global_variables_initializer()
 
-
-    # Run the Op to initialize the variables.
-    sess.run(init)
-
-    # Start the training loop.
-    for step in xrange(1000000):
-        start_time = time.time()
-
-      #for ind in range(total_samples/minibatch_size):
-      #   feed_dict = {index:ind}
-      for xb_,yb_, bb_ in get_samples(x_, y_):
-          feed_dict = {x:xb_, y:yb_}
-          # Run one step of the model.  The return values are the activations
-          # from the `train_op` (which is discarded) and the `loss` Op.  To
-          # inspect the values of your Ops or variables, you may include them
-          # in the list passed to sess.run() and the value tensors will be
-          # returned in the tuple from the call.
-          _, loss_value, eval_value, xnp_ = sess.run([train_op, loss, eval_correct,x_],
-																										 feed_dict=feed_dict)
-
-      duration = time.time() - start_time
+        # Begin
+        print('Beginning Session')
+        sess = tf.Session()
+        sess.run(init)
+        # Epochs
+        for step in np.arange(hp.epochs):
+            print('Epoch: %d/%d' % (step+1,hp.epochs))
+            start_time = time.time()
+            # Batches
+            for cnter,xb_,yb_, in get_samples(x_, y_, batch_size=hp.batch):
+                print('Batch: %d/%d' % (cnter+1,int(x_.shape[0]/hp.batch)))
+                # Train step.  The return values are the activations
+                # vars after "train_op" are tensors to return for inspection
+                sess.run(train_op, feed_dict={x:xb_, y:yb_})
+                #raise ValueError
+                #_, myloss, myx = sess.run([train_op, loss, x_],\
+                #                           feed_dict={x:xb_, y:yb_})
+                if (cnter+1) % 1 == 0:
+                    corr= sess.run(accuracy,feed_dict={x:xb_,y:yb_})
+                    print('Number Correct: %d/%d' % (corr,hp.batch))
+            duration = time.time() - start_time
 
 if __name__ == '__main__':
-	main()    
+    parser = ArgumentParser(description='Process some integers.')
+    parser.add_argument('--debug', action="store_true", 
+                        help='Load fraction of training set')
+    args = parser.parse_args() 
+
+    main(args=args)    
 
