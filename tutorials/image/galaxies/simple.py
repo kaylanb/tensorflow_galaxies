@@ -41,60 +41,116 @@ import tensorflow as tf
 
 TOWER_NAME = 'tower'
 
-class TrainingExamples(object):
-    def __init__(self):
-        self.data_fn= 'training_gathered_1000.hdf5'
-        self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
-        self.num_bands= 3 #grz
-        self.image_size= 64 
-        self.num_classes= 4 
-        self.n_val= 500 #validation size
-        self.batch= 128 # batch size
-        self.epochs= 10 
+class DataProperties(object):
+	def __init__(self,debug=False):
+		if debug: 
+			self.data_fn= 'training_gathered_small.hdf5'
+			self.n_val= 10 #validation size
+			self.n_test= 10 #validation size
+			self.batch= 20 # batch size
+		else:
+			self.data_fn= 'training_gathered_1000.hdf5'
+			self.n_val= 500 
+			self.n_test= 500 
+			self.batch= 128 
+		self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
+		self.train_dir= '/Users/kaylan1/tensorflow/galaxies/train_dir'
+		self.eval_dir= '/Users/kaylan1/tensorflow/galaxies/eval_dir'
+		self.num_bands= 3 #grz
+		self.image_size= 64 
+		self.num_classes= 4 
+		self.epochs= 10 
+		for dr in [self.data_dir,self.train_dir,self.eval_dir]:
+			if not os.path.exists(dr):
+				os.makedirs(dr)
 
-class HyperParams(TrainingExamples):
-    def __init__(self,debug=False):
-        super(HyperParams,self).__init__()
-        if debug: 
-            self.data_fn= 'training_gathered_small.hdf5'
-            self.n_val= 10 #validation size
-            self.batch= 20 # batch size
-        self.learnrate=0.1 # cifar10
-        self.conv1= self.conv1_dict()
-        self.conv2= self.conv2_dict()
-        self.lrn= self.local_response_norm()
-        self.pool_strides= self.max_pool_strides()
-        self.fully_conn= self.fully_connected_layers()
 
-    def conv1_dict(self):
-        return dict(filter_size= 5,
-                                in_channels= self.num_bands,
-                                out_channels= 64)
+class HyperParams(object):
+	def __init__(self,num_bands=None,image_size=None):
+		assert(not num_bands is None)
+		assert(not image_size is None)
+		self.learnrate=0.1 # cifar10
+		self.conv1= self.conv1_dict(num_bands=num_bands)
+		self.conv2= self.conv2_dict()
+		self.lrn= self.local_response_norm()
+		self.pool_strides= self.max_pool_strides()
+		self.fully_conn= self.fully_connected_layers(image_size=image_size)
 
-    def conv2_dict(self):
-        return dict(filter_size= 5,
-                                in_channels= self.conv1['out_channels'],
-                                out_channels=64)
+	def conv1_dict(self,num_bands=None):
+		return dict(filter_size= 5,
+								in_channels= num_bands,
+								out_channels= 64)
 
-    def local_response_norm(self):
-        return dict(depth_radius= 4, # default 5
-                                bias= 1., #default 1,
-                                alpha= 0.001 / 9.0, #default 1
-                          beta= 0.75 #default 0.5
-                             )
+	def conv2_dict(self):
+		return dict(filter_size= 5,
+								in_channels= self.conv1['out_channels'],
+								out_channels=64)
 
-    def max_pool_strides(self):
-        return [1,2,2,1]
+	def local_response_norm(self):
+		return dict(depth_radius= 4, # default 5
+								bias= 1., #default 1,
+								alpha= 0.001 / 9.0, #default 1
+						  beta= 0.75 #default 0.5
+							 )
 
-    def fully_connected_layers(self):
-    # Cifar10 ex set layer size to pool2 feat map size * num_feat maps
-        # We did two max_pools...
-        first= int( self.image_size / self.pool_strides[1]**2 * self.conv2['out_channels'] )
-        # Cifar10 did half this for second layer
-        second= first/2
-        assert(second % 2 == 0)
-        return dict(first=first,\
-                    second=second)
+	def max_pool_strides(self):
+		return [1,2,2,1]
+
+	def fully_connected_layers(self,image_size=None):
+	# Cifar10 ex set layer size to pool2 feat map size * num_feat maps
+		# We did two max_pools...
+		first= int( image_size / self.pool_strides[1]**2 * self.conv2['out_channels'] )
+		# Cifar10 did half this for second layer
+		second= first/2
+		assert(second % 2 == 0)
+		return dict(first=first,\
+					second=second)
+
+
+
+class DataSet(object):
+	def __init__(self,debug=False):
+		self.info= DataProperties(debug=debug)
+		self.hyper= HyperParams(num_bands= self.info.num_bands,\
+								image_size= self.info.image_size)
+		# Store data in memory
+		print('Reading all data')
+		self.read_all_data()
+
+	def read_all_data(self):
+		# FIX ME! val and test are batch_size sized samples
+		fobj= h5py.File(os.path.join(self.info.data_dir,self.info.data_fn),'r')
+		# FIX ME!! need to ensure background ids match star,qso ids...
+		# FIX ME: Add in variances!
+		# FIX ME! invvar --> var - mean() and setting bad pixels some high << 2^32 value
+		# FIX ME! could just use bad pixel map for now
+		# instances (2500) x n_rotations(none) x 64 x 64 x 3 
+		self.x_= np.concatenate( (fobj['elg'][:] + fobj['back'][:],\
+								  fobj['star'][:] + fobj['back'][:],\
+								  fobj['qso'][:] + fobj['back'][:],\
+								  fobj['back'][:]),axis=0)
+		d= dict(star=0,qso=1,elg=2,back=3)
+		self.y_= np.concatenate( (np.zeros(fobj['elg'].shape[0]).astype(np.int32)+d['elg'],\
+								  np.zeros(fobj['star'].shape[0]).astype(np.int32)+d['star'],\
+								  np.zeros(fobj['qso'].shape[0]).astype(np.int32)+d['qso'],\
+								  np.zeros(fobj['back'].shape[0]).astype(np.int32)+d['back']),axis=0)
+		#q_ = type of night #instances integer, make only 1 type night for now
+		#b_= backgrounds # type x b_instances x 6 x 64 x 64
+		# Shuffle, split train vs. val
+		ind= np.arange(self.x_.shape[0]).astype(int)
+		np.random.shuffle(ind)
+		# Val
+		sz= self.info.batch
+		self.val_x_ = self.x_[ ind[:sz],...]
+		self.val_y_ = self.y_[ ind[:sz],...]
+		# Test
+		self.test_x_ = self.x_[ ind[sz : 2*sz],...]
+		self.test_y_ = self.y_[ ind[sz : 2*sz],...]
+		# Train
+		self.x_= self.x_[ ind[2*sz : ],...]
+		self.y_= self.y_[ ind[2*sz : ],...]
+		assert(self.x_.shape[0] > self.val_x_.shape[0])
+	
 
 
 def _variable_on_cpu(name, shape, initializer):
@@ -162,8 +218,36 @@ def _activation_summary(x):
                     tf.nn.zero_fraction(x))
 
 
+class _LoggerHook(tf.train.SessionRunHook):
+	"""
+	Use with cifar10 tf.train.MonitoredTrainingSession()
+	Logs loss and runtime.
+	"""
 
-def inference(images, hyper=None):
+	def begin(self):
+		self._step = -1
+
+	def before_run(self, run_context):
+		self._step += 1
+		self._start_time = time.time()
+		return tf.train.SessionRunArgs(loss)  # Asks for loss value.
+
+	def after_run(self, run_context, run_values):
+		duration = time.time() - self._start_time
+		loss_value = run_values.results
+		if self._step % 10 == 0:
+			num_examples_per_step = FLAGS.batch_size
+			examples_per_sec = num_examples_per_step / duration
+			sec_per_batch = float(duration)
+
+			format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
+						'sec/batch)')
+			print (format_str % (datetime.now(), self._step, loss_value,
+							   examples_per_sec, sec_per_batch))
+
+
+
+def inference(images, hyper=None,info=None):
   """Build the CIFAR-10 model.
 
   Args:
@@ -224,7 +308,7 @@ def inference(images, hyper=None):
   # local3
   with tf.variable_scope('local3') as scope:
     # Move everything into depth so we can perform a single matrix multiply.
-    reshape = tf.reshape(pool2, [hyper.batch, -1])
+    reshape = tf.reshape(pool2, [info.batch, -1])
     dim = reshape.get_shape()[1].value
     weights = _variable_with_weight_decay('weights', shape=[dim, hyper.fully_conn['first'] ],
                                           stddev=0.04, wd=0.004)
@@ -246,9 +330,9 @@ def inference(images, hyper=None):
   # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
   # and performs the softmax internally for efficiency.
   with tf.variable_scope('softmax_linear') as scope:
-    weights = _variable_with_weight_decay('weights', [hyper.fully_conn['second'], hyper.num_classes],
+    weights = _variable_with_weight_decay('weights', [hyper.fully_conn['second'], info.num_classes],
                                           stddev=1/float(hyper.fully_conn['second']), wd=0.0)
-    biases = _variable_on_cpu('biases', [hyper.num_classes],
+    biases = _variable_on_cpu('biases', [info.num_classes],
                               tf.constant_initializer(0.0))
     softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
     _activation_summary(softmax_linear)
@@ -302,6 +386,7 @@ def training(loss, global_step, learnrate=None):
   # Use the optimizer to apply the gradients that minimize the loss
   # (and also increment the global step counter) as a single training step.
   train_op = optimizer.minimize(loss, global_step=global_step)
+  
   return train_op
 
   # Variables that affect learning rate.
@@ -371,7 +456,6 @@ def accuracy_on_valdata(logits, labels):
   #return tf.div(num_corr, tf.cast(correct_bool.get_shape()[0], tf.float32) )
 
 
-
 def get_samples(x_,y_, batch_size=None): 
                 #b_,#type x b_instances x 6 x 64 x 64
                 #q_,
@@ -391,88 +475,114 @@ def get_samples(x_,y_, batch_size=None):
         #bb_ = b_[ind_types,bind,...]
         #if np.random.rand() > .5: 
         #    xb_ = xb[:,:,::-1,:] #indecies are wrong!
-        yield i,xb_, yb_ #, bb_
+        yield i+1,xb_, yb_ #, bb_
 
 def main(args=None):
-    # Config
-    hp= HyperParams(debug=args.debug)
-    # Read data
-    print(os.path.join(hp.data_dir,hp.data_fn))
-    fobj= h5py.File(os.path.join(hp.data_dir,hp.data_fn),'r')
-    # FIX ME!! need to ensure background ids match star,qso ids...
-    # FIX ME: Add in variances!
-    # FIX ME! invvar --> var - mean() and setting bad pixels some high << 2^32 value
-    # FIX ME! could just use bad pixel map for now
-    print('Loading Data')
-    # instances (2500) x n_rotations(none) x 64 x 64 x 3 
-    x_= np.concatenate( (fobj['elg'][:] + fobj['back'][:],\
-                       fobj['star'][:] + fobj['back'][:],\
-                       fobj['qso'][:] + fobj['back'][:],\
-                       fobj['back'][:]),axis=0)
-    d= dict(star=0,qso=1,elg=2,back=3)
-    y_= np.concatenate( (np.zeros(fobj['elg'].shape[0]).astype(np.int32)+d['elg'],\
-                       np.zeros(fobj['star'].shape[0]).astype(np.int32)+d['star'],\
-                       np.zeros(fobj['qso'].shape[0]).astype(np.int32)+d['qso'],\
-                       np.zeros(fobj['back'].shape[0]).astype(np.int32)+d['back']),axis=0)
-    #q_ = type of night #instances integer, make only 1 type night for now
-    #b_= backgrounds # type x b_instances x 6 x 64 x 64
-    # Shuffle, split train vs. val
-    ind= np.arange(x_.shape[0]).astype(int)
-    np.random.shuffle(ind)
-    xval_= x_[ ind[:hp.n_val],...]
-    yval_= y_[ ind[:hp.n_val],...]
-    x_= x_[ ind[hp.n_val:],...]
-    y_= y_[ ind[hp.n_val:],...]
-    assert(x_.shape[0] > xval_.shape[0])
-    with tf.Graph().as_default():
-        print('Building Graph')
-        # Generate placeholders for the images and labels.
-        x = tf.placeholder(tf.float32, shape=[hp.batch, 64, 64, 3])
-        y = tf.placeholder(tf.int32, shape=[hp.batch])
-        #b = placeholder(tf.float32, shape=[10, None])
-        #x = x + b
+	# Data, hyper params, etc
+	data= DataSet(debug=args.debug)
+	with tf.Graph().as_default():
+		print('Building Graph')
+		# Generate placeholders for the images and labels.
+		x = tf.placeholder(tf.float32, shape=[data.info.batch, 64, 64, 3])
+		y = tf.placeholder(tf.int32, shape=[data.info.batch])
+		#b = placeholder(tf.float32, shape=[10, None])
+		#x = x + b
 
-        global_step = tf.contrib.framework.get_or_create_global_step()
+		global_step = tf.contrib.framework.get_or_create_global_step()
 
-        # CNN Infrastructure
-        logits = inference(x, hyper=hp)
-                                 #100,
-                                 #100, 10)
+		# CNN Infrastructure
+		logits = inference(x, hyper=data.hyper,info=data.info)
+								 #100,
+								 #100, 10)
 
-        # Add to the Graph the Ops for loss calculation.
-        loss= cross_entropy_loss(logits, y)
+		# Add to the Graph the Ops for loss calculation.
+		loss= cross_entropy_loss(logits, y)
+		tf.summary.scalar('my_loss', loss)
 
-        # Add to the Graph the Ops that calculate and apply gradients.
-        train_op = training(loss, global_step, learnrate=hp.learnrate)
+		# Add to the Graph the Ops that calculate and apply gradients.
+		train_op = training(loss, global_step, learnrate=data.hyper.learnrate)
+		tf.summary.scalar('my_learnrate', data.hyper.learnrate)
 
-        # Add the Op to compare the logits to the labels during evaluation.
-        #using sparse_softmax_cross_entropy_with_logits
-        accuracy = accuracy_on_valdata(logits, y) 
+		# Add the Op to compare the logits to the labels during evaluation.
+		#using sparse_softmax_cross_entropy_with_logits
+		accuracy = accuracy_on_valdata(logits, y) 
+		tf.summary.scalar('my_accuracty', accuracy)
+		
+		# Add histograms for trainable variables.
+		for var in tf.trainable_variables():
+			tf.summary.histogram(var.op.name, var)
 
-        # Add the variable initializer Op.
-        init = tf.global_variables_initializer()
+		# Summar tensor
+		summary = tf.summary.merge_all()
+		# Saver tensor for training stuff
+		saver = tf.train.Saver()
+	
+		# Add the variable initializer Op.
+		init = tf.global_variables_initializer()
 
-        # Begin
-        print('Beginning Session')
-        sess = tf.Session()
-        sess.run(init)
-        # Epochs
-        for step in np.arange(hp.epochs):
-            print('Epoch: %d/%d' % (step+1,hp.epochs))
-            start_time = time.time()
-            # Batches
-            for cnter,xb_,yb_, in get_samples(x_, y_, batch_size=hp.batch):
-                print('Batch: %d/%d' % (cnter+1,int(x_.shape[0]/hp.batch)))
-                # Train step.  The return values are the activations
-                # vars after "train_op" are tensors to return for inspection
-                sess.run(train_op, feed_dict={x:xb_, y:yb_})
-                #raise ValueError
-                #_, myloss, myx = sess.run([train_op, loss, x_],\
-                #                           feed_dict={x:xb_, y:yb_})
-                if (cnter+1) % 1 == 0:
-                    corr= sess.run(accuracy,feed_dict={x:xb_,y:yb_})
-                    print('Number Correct: %d/%d' % (corr,hp.batch))
-            duration = time.time() - start_time
+		## Launch Session with Verbose Outputs
+		#step=0
+		#with tf.train.MonitoredTrainingSession(\
+		#		checkpoint_dir=FLAGS.train_dir,\
+		#		hooks=[tf.train.StopAtStepHook(last_step=hp.epochs),\
+		#			   tf.train.NanTensorHook(loss),\
+		#			   _LoggerHook()],\
+		#		config=tf.ConfigProto(\
+		#			   log_device_placement=FLAGS.log_device_placement),\
+		#		) as mon_sess:
+		#	while not mon_sess.should_stop():
+		#		print('Epoch: %d/%d' % (step+1,hp.epochs))
+		#		mon_sess.run(init)
+		#		mon_sess.run(train_op)
+		# Begin
+		print('Beginning Session')
+		sess = tf.Session()
+		
+		# Write checkpoint stuff
+		summary_writer = tf.summary.FileWriter(data.info.train_dir,sess.graph)
+		print('Writing events to %s' % data.info.train_dir)
+		
+		sess.run(init)
+		# Epochs
+		for epoch in np.arange(data.info.epochs):
+			print('Epoch: %d/%d' % (epoch+1,data.info.epochs))
+			start_time = time.time()
+			# Batches
+			for step,xb_,yb_, in get_samples(data.x_, data.y_, batch_size=data.info.batch):
+				print('Batch: %d/%d' % (step,int(data.x_.shape[0]/data.info.batch)))
+				batch_time = time.time()
+				# Train step.  The return values are the activations
+				# vars after "train_op" are tensors to return for inspection
+				feed_dict={x:xb_, y:yb_}
+				sess.run(train_op, feed_dict=feed_dict)
+				#raise ValueError
+				#_, myloss, myx = sess.run([train_op, loss, x_],\
+				#                           feed_dict={x:xb_, y:yb_})
+				if step % 10 == 0:
+					# Update the events file.
+					summary_str = sess.run(summary, feed_dict=feed_dict)
+					summary_writer.add_summary(summary_str, step)
+					summary_writer.flush()
+					# Stats
+					corr= sess.run(accuracy,feed_dict=feed_dict)
+					duration= time.time() - batch_time
+					print("Training: step %d (%.3f sec), Correct %d/%d" % \
+							(step, duration,corr,data.info.batch))
+			duration = time.time() - start_time
+			# Save a checkpoint and evaluate the model every epoch
+			#if step % 1000 == 0:
+			checkpoint_file = os.path.join(data.info.eval_dir, 'model.ckpt')
+			saver.save(sess, checkpoint_file, global_step=step)
+			# Validation, Test
+			corr= sess.run(accuracy,feed_dict={x:data.val_x_, y:data.val_y_})
+			duration= time.time() - batch_time
+			print("Validation: epoch %d (%.3f sec), Correct %d/%d" % \
+					(epoch+1, duration,corr,data.info.batch))
+			corr= sess.run(accuracy,feed_dict={x:data.test_x_, y:data.test_y_})
+			duration= time.time() - batch_time
+			print("Test: epoch %d (%.3f sec), Correct %d/%d" % \
+					(epoch+1, duration,corr,data.info.batch))
+
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='Process some integers.')
