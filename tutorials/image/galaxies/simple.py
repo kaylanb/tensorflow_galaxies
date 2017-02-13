@@ -35,6 +35,7 @@ import h5py
 import os
 import numpy as np
 from argparse import ArgumentParser
+from glob import glob
 import re
 import time
 import tensorflow as tf
@@ -477,9 +478,27 @@ def get_samples(x_,y_, batch_size=None):
         #    xb_ = xb[:,:,::-1,:] #indecies are wrong!
         yield i+1,xb_, yb_ #, bb_
 
+class TextWriter(object):
+	def __init__(self,train_dir=None):
+		self.train_dir=train_dir
+		fns= glob(os.path.join(self.train_dir,'epoch*loss.txt'))
+		if len(fns) > 0:
+			for fn in fns:
+				os.remove(fn)
+
+	def write(self,loss,epoch=None,step=None):
+		fn= os.path.join(self.train_dir,'epoch_%d_loss.txt' % epoch)
+		if not os.path.exists(fn):
+			with open(fn,'a+') as foo:
+				foo.write('#step loss\n')	
+		with open(fn,'a+') as foo:
+			foo.write('%d %.2f\n' % (step,loss))
+
 def main(args=None):
 	# Data, hyper params, etc
 	data= DataSet(debug=args.debug)
+	# Log myown stuff
+	kjb_writer= TextWriter(train_dir= data.info.train_dir)
 	with tf.Graph().as_default():
 		print('Building Graph')
 		# Generate placeholders for the images and labels.
@@ -554,7 +573,8 @@ def main(args=None):
 				# Train step.  The return values are the activations
 				# vars after "train_op" are tensors to return for inspection
 				feed_dict={x:xb_, y:yb_}
-				sess.run(train_op, feed_dict=feed_dict)
+				_,kjb_loss= sess.run([train_op,loss], feed_dict=feed_dict)
+				kjb_writer.write(kjb_loss,epoch=epoch,step=step)
 				#raise ValueError
 				#_, myloss, myx = sess.run([train_op, loss, x_],\
 				#                           feed_dict={x:xb_, y:yb_})
