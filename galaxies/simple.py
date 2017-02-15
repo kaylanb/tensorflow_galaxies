@@ -170,9 +170,9 @@ def _variable_on_cpu(name, shape, initializer):
     Variable Tensor
   """
   #with tf.device('/cpu:0'):
-  with tf.device('/gpu:0'):
-    dtype = tf.float32
-    var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
+  #with tf.device('/gpu:0'):
+  dtype = tf.float32
+  var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
   return var
 
 
@@ -504,7 +504,7 @@ def main(args=None):
     data= DataSet(debug=args.debug,data_dir=args.data_dir)
     # Log myown stuff
     kjb_writer= TextWriter(train_dir= data.info.train_dir)
-    with tf.Graph().as_default(), tf.device('/gpu:0'):
+    with tf.Graph().as_default(): #, tf.device('/gpu:0'):
         print('Building Graph')
         # Generate placeholders for the images and labels.
         x = tf.placeholder(tf.float32, shape=[data.info.batch, 64, 64, 3])
@@ -561,7 +561,7 @@ def main(args=None):
         # Begin
         print('Beginning Session')
         # GPU
-        config = tf.ConfigProto(log_device_placement = True)
+        config = tf.ConfigProto(log_device_placement = False,allow_soft_placement = True)
         #config.gpu_options.allow_growth = True
         config.gpu_options.per_process_gpu_memory_fraction = 0.4
         sess = tf.Session(config=config)
