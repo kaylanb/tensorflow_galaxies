@@ -43,27 +43,31 @@ import tensorflow as tf
 TOWER_NAME = 'tower'
 
 class DataProperties(object):
-	def __init__(self,debug=False):
-		if debug: 
-			self.data_fn= 'training_gathered_small.hdf5'
-			self.n_val= 10 #validation size
-			self.n_test= 10 #validation size
-			self.batch= 20 # batch size
-		else:
-			self.data_fn= 'training_gathered_1000.hdf5'
-			self.n_val= 500 
-			self.n_test= 500 
-			self.batch= 128 
-		self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
-		self.train_dir= '/Users/kaylan1/tensorflow/galaxies/train_dir'
-		self.eval_dir= '/Users/kaylan1/tensorflow/galaxies/eval_dir'
-		self.num_bands= 3 #grz
-		self.image_size= 64 
-		self.num_classes= 4 
-		self.epochs= 10 
-		for dr in [self.data_dir,self.train_dir,self.eval_dir]:
-			if not os.path.exists(dr):
-				os.makedirs(dr)
+    def __init__(self,debug=False,  data_dir=None):
+        if debug: 
+            print('Loading small')
+            self.data_fn= 'training_gathered_small.hdf5'
+            self.n_val= 10 #validation size
+            self.n_test= 10 #validation size
+            self.batch= 20 # batch size
+        else:
+            self.data_fn= 'training_gathered_1000.hdf5'
+            self.n_val= 500 
+            self.n_test= 500 
+            self.batch= 128 
+        if data_dir is None:
+            self.data_dir= '/Users/kaylan1/tensorflow/galaxies/data_dir'
+        else:
+            self.data_dir= data_dir
+        self.train_dir= os.path.join(os.path.basename(self.data_dir),'train_dir')
+        self.eval_dir= os.path.join(os.path.basename(self.data_dir),'eval_dir')
+        self.num_bands= 3 #grz
+        self.image_size= 64 
+        self.num_classes= 4 
+        self.epochs= 10 
+        for dr in [self.data_dir,self.train_dir,self.eval_dir]:
+            if not os.path.exists(dr):
+                os.makedirs(dr)
 
 
 class HyperParams(object):
@@ -110,8 +114,8 @@ class HyperParams(object):
 
 
 class DataSet(object):
-	def __init__(self,debug=False):
-		self.info= DataProperties(debug=debug)
+	def __init__(self,debug=False,data_dir=None):
+		self.info= DataProperties(debug=debug,data_dir=data_dir)
 		self.hyper= HyperParams(num_bands= self.info.num_bands,\
 								image_size= self.info.image_size)
 		# Store data in memory
@@ -165,7 +169,8 @@ def _variable_on_cpu(name, shape, initializer):
   Returns:
     Variable Tensor
   """
-  with tf.device('/cpu:0'):
+  #with tf.device('/cpu:0'):
+  with tf.device('/gpu:0'):
     dtype = tf.float32
     var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
   return var
@@ -495,118 +500,124 @@ class TextWriter(object):
 			foo.write('%d %.2f\n' % (step,loss))
 
 def main(args=None):
-	# Data, hyper params, etc
-	data= DataSet(debug=args.debug)
-	# Log myown stuff
-	kjb_writer= TextWriter(train_dir= data.info.train_dir)
-	with tf.Graph().as_default():
-		print('Building Graph')
-		# Generate placeholders for the images and labels.
-		x = tf.placeholder(tf.float32, shape=[data.info.batch, 64, 64, 3])
-		y = tf.placeholder(tf.int32, shape=[data.info.batch])
-		#b = placeholder(tf.float32, shape=[10, None])
-		#x = x + b
+    # Data, hyper params, etc
+    data= DataSet(debug=args.debug,data_dir=args.data_dir)
+    # Log myown stuff
+    kjb_writer= TextWriter(train_dir= data.info.train_dir)
+    with tf.Graph().as_default(), tf.device('/gpu:0'):
+        print('Building Graph')
+        # Generate placeholders for the images and labels.
+        x = tf.placeholder(tf.float32, shape=[data.info.batch, 64, 64, 3])
+        y = tf.placeholder(tf.int32, shape=[data.info.batch])
+        #b = placeholder(tf.float32, shape=[10, None])
+        #x = x + b
 
-		global_step = tf.contrib.framework.get_or_create_global_step()
+        global_step = tf.contrib.framework.get_or_create_global_step()
 
-		# CNN Infrastructure
-		logits = inference(x, hyper=data.hyper,info=data.info)
-								 #100,
-								 #100, 10)
+        # CNN Infrastructure
+        logits = inference(x, hyper=data.hyper,info=data.info)
+                                 #100,
+                                 #100, 10)
 
-		# Add to the Graph the Ops for loss calculation.
-		loss= cross_entropy_loss(logits, y)
-		tf.summary.scalar('my_loss', loss)
+        # Add to the Graph the Ops for loss calculation.
+        loss= cross_entropy_loss(logits, y)
+        tf.summary.scalar('my_loss', loss)
 
-		# Add to the Graph the Ops that calculate and apply gradients.
-		train_op = training(loss, global_step, learnrate=data.hyper.learnrate)
-		tf.summary.scalar('my_learnrate', data.hyper.learnrate)
+        # Add to the Graph the Ops that calculate and apply gradients.
+        train_op = training(loss, global_step, learnrate=data.hyper.learnrate)
+        tf.summary.scalar('my_learnrate', data.hyper.learnrate)
 
-		# Add the Op to compare the logits to the labels during evaluation.
-		#using sparse_softmax_cross_entropy_with_logits
-		accuracy = accuracy_on_valdata(logits, y) 
-		tf.summary.scalar('my_accuracty', accuracy)
-		
-		# Add histograms for trainable variables.
-		for var in tf.trainable_variables():
-			tf.summary.histogram(var.op.name, var)
+        # Add the Op to compare the logits to the labels during evaluation.
+        #using sparse_softmax_cross_entropy_with_logits
+        accuracy = accuracy_on_valdata(logits, y) 
+        tf.summary.scalar('my_accuracty', accuracy)
+        
+        # Add histograms for trainable variables.
+        for var in tf.trainable_variables():
+            tf.summary.histogram(var.op.name, var)
 
-		# Summar tensor
-		summary = tf.summary.merge_all()
-		# Saver tensor for training stuff
-		saver = tf.train.Saver()
-	
-		# Add the variable initializer Op.
-		init = tf.global_variables_initializer()
+        # Summar tensor
+        summary = tf.summary.merge_all()
+        # Saver tensor for training stuff
+        saver = tf.train.Saver()
 
-		## Launch Session with Verbose Outputs
-		#step=0
-		#with tf.train.MonitoredTrainingSession(\
-		#		checkpoint_dir=FLAGS.train_dir,\
-		#		hooks=[tf.train.StopAtStepHook(last_step=hp.epochs),\
-		#			   tf.train.NanTensorHook(loss),\
-		#			   _LoggerHook()],\
-		#		config=tf.ConfigProto(\
-		#			   log_device_placement=FLAGS.log_device_placement),\
-		#		) as mon_sess:
-		#	while not mon_sess.should_stop():
-		#		print('Epoch: %d/%d' % (step+1,hp.epochs))
-		#		mon_sess.run(init)
-		#		mon_sess.run(train_op)
-		# Begin
-		print('Beginning Session')
-		sess = tf.Session()
-		
-		# Write checkpoint stuff
-		summary_writer = tf.summary.FileWriter(data.info.train_dir,sess.graph)
-		print('Writing events to %s' % data.info.train_dir)
-		
-		sess.run(init)
-		# Epochs
-		for epoch in np.arange(data.info.epochs):
-			print('Epoch: %d/%d' % (epoch+1,data.info.epochs))
-			start_time = time.time()
-			# Batches
-			for step,xb_,yb_, in get_samples(data.x_, data.y_, batch_size=data.info.batch):
-				print('Batch: %d/%d' % (step,int(data.x_.shape[0]/data.info.batch)))
-				batch_time = time.time()
-				# Train step.  The return values are the activations
-				# vars after "train_op" are tensors to return for inspection
-				feed_dict={x:xb_, y:yb_}
-				_,kjb_loss= sess.run([train_op,loss], feed_dict=feed_dict)
-				kjb_writer.write(kjb_loss,epoch=epoch,step=step)
-				#raise ValueError
-				#_, myloss, myx = sess.run([train_op, loss, x_],\
-				#                           feed_dict={x:xb_, y:yb_})
-				if step % 10 == 0:
-					# Update the events file.
-					summary_str = sess.run(summary, feed_dict=feed_dict)
-					summary_writer.add_summary(summary_str, step)
-					summary_writer.flush()
-					# Stats
-					corr= sess.run(accuracy,feed_dict=feed_dict)
-					duration= time.time() - batch_time
-					print("Training: step %d (%.3f sec), Correct %d/%d" % \
-							(step, duration,corr,data.info.batch))
-			duration = time.time() - start_time
-			# Save a checkpoint and evaluate the model every epoch
-			#if step % 1000 == 0:
-			checkpoint_file = os.path.join(data.info.eval_dir, 'model.ckpt')
-			saver.save(sess, checkpoint_file, global_step=step)
-			# Validation, Test
-			corr= sess.run(accuracy,feed_dict={x:data.val_x_, y:data.val_y_})
-			duration= time.time() - batch_time
-			print("Validation: epoch %d (%.3f sec), Correct %d/%d" % \
-					(epoch+1, duration,corr,data.info.batch))
-			corr= sess.run(accuracy,feed_dict={x:data.test_x_, y:data.test_y_})
-			duration= time.time() - batch_time
-			print("Test: epoch %d (%.3f sec), Correct %d/%d" % \
-					(epoch+1, duration,corr,data.info.batch))
+        # Add the variable initializer Op.
+        init = tf.global_variables_initializer()
+
+        ## Launch Session with Verbose Outputs
+        #step=0
+        #with tf.train.MonitoredTrainingSession(\
+        #		checkpoint_dir=FLAGS.train_dir,\
+        #		hooks=[tf.train.StopAtStepHook(last_step=hp.epochs),\
+        #			   tf.train.NanTensorHook(loss),\
+        #			   _LoggerHook()],\
+        #		config=tf.ConfigProto(\
+        #			   log_device_placement=FLAGS.log_device_placement),\
+        #		) as mon_sess:
+        #	while not mon_sess.should_stop():
+        #		print('Epoch: %d/%d' % (step+1,hp.epochs))
+        #		mon_sess.run(init)
+        #		mon_sess.run(train_op)
+        # Begin
+        print('Beginning Session')
+        # GPU
+        config = tf.ConfigProto(log_device_placement = True)
+        #config.gpu_options.allow_growth = True
+        config.gpu_options.per_process_gpu_memory_fraction = 0.4
+        sess = tf.Session(config=config)
+        
+        # Write checkpoint stuff
+        summary_writer = tf.summary.FileWriter(data.info.train_dir,sess.graph)
+        print('Writing events to %s' % data.info.train_dir)
+        
+        sess.run(init)
+        # Epochs
+        for epoch in np.arange(data.info.epochs):
+            print('Epoch: %d/%d' % (epoch+1,data.info.epochs))
+            start_time = time.time()
+            # Batches
+            for step,xb_,yb_, in get_samples(data.x_, data.y_, batch_size=data.info.batch):
+                print('Batch: %d/%d' % (step,int(data.x_.shape[0]/data.info.batch)))
+                batch_time = time.time()
+                # Train step.  The return values are the activations
+                # vars after "train_op" are tensors to return for inspection
+                feed_dict={x:xb_, y:yb_}
+                _,kjb_loss= sess.run([train_op,loss], feed_dict=feed_dict)
+                kjb_writer.write(kjb_loss,epoch=epoch,step=step)
+                #raise ValueError
+                #_, myloss, myx = sess.run([train_op, loss, x_],\
+                #                           feed_dict={x:xb_, y:yb_})
+                if step % 10 == 0:
+                    # Update the events file.
+                    summary_str = sess.run(summary, feed_dict=feed_dict)
+                    summary_writer.add_summary(summary_str, step)
+                    summary_writer.flush()
+                    # Stats
+                    corr= sess.run(accuracy,feed_dict=feed_dict)
+                    duration= time.time() - batch_time
+                    print("Training: step %d (%.3f sec), Correct %d/%d" % \
+                            (step, duration,corr,data.info.batch))
+            duration = time.time() - start_time
+            # Save a checkpoint and evaluate the model every epoch
+            #if step % 1000 == 0:
+            checkpoint_file = os.path.join(data.info.eval_dir, 'model.ckpt')
+            saver.save(sess, checkpoint_file, global_step=step)
+            # Validation, Test
+            corr= sess.run(accuracy,feed_dict={x:data.val_x_, y:data.val_y_})
+            duration= time.time() - batch_time
+            print("Validation: epoch %d (%.3f sec), Correct %d/%d" % \
+                    (epoch+1, duration,corr,data.info.batch))
+            corr= sess.run(accuracy,feed_dict={x:data.test_x_, y:data.test_y_})
+            duration= time.time() - batch_time
+            print("Test: epoch %d (%.3f sec), Correct %d/%d" % \
+                    (epoch+1, duration,corr,data.info.batch))
 
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='Process some integers.')
     parser.add_argument('--debug', action="store_true", 
+                        help='Load fraction of training set')
+    parser.add_argument('--data_dir', action="store", required=False,
                         help='Load fraction of training set')
     args = parser.parse_args() 
 
